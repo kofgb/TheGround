@@ -35,7 +35,7 @@ public class GameService {
 
     private final UserPitcherRepository userPitcherRepository;
 
-    private final String[] pitchTypes = { "fourSeam", "slider", "sinker", "changeUp", "curve", "cutter", "knuckleCurve", "splitter", "twoSeam", "knuckleball", "eephus", "screwball" };
+    private final String[] pitchTypes = { "포심", "슬라이더", "싱커", "체인지업", "커브", "커터", "너클커브", "스플리터", "투심", "너클볼", "느린공", "스크류볼" };
 
     @Transactional
     public Map<String, BriefInfoResDto> teamBriefInfo() throws Exception {
@@ -96,12 +96,15 @@ public class GameService {
     }
 
     public Map<String, Object> battingSimulate(String uid) {
-        long matchSeq = matchRepository.findTop1ByUserSeq_UserUid(uid).getMatchSeq();
+        Match match = matchRepository.findTop1ByUserSeq_UserUid(uid);
+        long matchSeq = match.getMatchSeq();
+        boolean isUserHome = match.getMatchHomeFlag();
         Log log = logRepository.findByMatchSeq(matchSeq);
         MatchSetting setting = matchSettingRepository.findByMatchSeq(matchSeq).get();
         Scoreboard scoreboard = scoreboardRepository.findByMatchSeq(matchSeq);
         Description descriptions = descriptionRepository.findByMatchSeq(matchSeq);
-
+        long aiTeamSeq = match.getAiTeamSeq();
+        AISetting aiSetting = aiSettingRepository.findByAiTeamSeq(aiTeamSeq).get();
         long pitcherSeq = log.getLogPitcher();
         Pitcher pitcher = pitcherRepository.findByPitcherSeq(pitcherSeq);
         String pitcherName = pitcher.getPitcherName();
@@ -121,6 +124,7 @@ public class GameService {
         
         int inning = log.getLogInning();
         String half = log.getLogHalf();
+        boolean isUserOffense = half.equals("Top") ^ isUserHome;
         int out = log.getLogOut();
         int ball = 0;
         int strike = 0;
@@ -129,12 +133,19 @@ public class GameService {
         StringBuilder eventSB = new StringBuilder();
         StringBuilder fullSB = new StringBuilder();
 
-        int nextBat = setting.getMatchSettingNextBat();
-        eventSB.append(nextBat == 0 ? 9 : nextBat).append("번 타자 ").append(hitterName).append("\n");
+
+        int battingOrder;
+        if (isUserOffense) {
+            battingOrder = setting.getMatchSettingNextBat();
+        } else {
+            battingOrder = aiSetting.getAiSettingHitter();
+        }
+        eventSB.append(battingOrder == 0 ? 9 : battingOrder).append("번 타자 ").append(hitterName).append("\n");
 
         boolean isEnd = false;
         LinkedList<PitchResDto> pitches = new LinkedList<>();
 
+        // 타석 진행
         while (!isEnd) {
             PitchResDto pitch = new PitchResDto();
             String description = null;
@@ -176,38 +187,38 @@ public class GameService {
             double maxVelocity = pitcher.getMaxVelocity();
             double velocity = maxVelocity - Math.random() * 5;
             switch (pitchType) {
-                case "slider":
+                case "슬라이더":
                     velocity = -7.5;
                     break;
-                case "sinker":
-                case "twoSeam":
+                case "싱커":
+                case "투심":
                     velocity = -2;
                     break;
-                case "changeUp":
+                case "체인지업":
                     velocity = -9;
                     break;
-                case "curve":
+                case "커브":
                     velocity = -14;
                     break;
-                case "cutter":
+                case "커터":
                     velocity = -4.5;
                     break;
-                case "knuckleCurve":
+                case "너클커브":
                     velocity = -11.5;
                     break;
-                case "splitter":
+                case "스플리터":
                     velocity = -7;
                     break;
-                case "knuckleball":
+                case "너클볼":
                     velocity = -23;
                     break;
-                case "eephus":
+                case "느린공":
                     velocity = -30;
                     break;
-                case "screwball":
+                case "스크류볼":
                     velocity = -19;
                     break;
-                case "fourSeam":
+                case "포심":
                 default:
                     break;
             }
@@ -737,12 +748,23 @@ public class GameService {
 
         // 3아웃 시 이닝 교대
         if (out == 3) {
+            log1stBase = null;
+            log2ndBase = null;
+            log3rdBase = null;
             if (half.equals("Bottom")) {
                 inning++;
-                if (inning > 9) inning = -1;
                 half = "Top";
             } else {
                 half = "Bottom";
+            }
+            if (inning > 9) {
+                inning = -1;
+            } else {
+                if (isUserOffense) {
+                    battingOrder = setting.getMatchSettingNextBat();
+                } else {
+                    battingOrder = aiSetting.getAiSettingHitter();
+                }
             }
         }
 
@@ -752,8 +774,8 @@ public class GameService {
         }
 
         // 다음 타자로 넘기고, 경기 진행 및 설정에 타자 갱신
-        nextBat = (nextBat + 1) % 9;
-        switch (nextBat) {
+        battingOrder = (battingOrder + 1) % 9;
+        switch (battingOrder) {
             case 1:
                 hitterSeq = setting.getMatchSetting1st().getHitterSeq();
                 break;
@@ -782,7 +804,7 @@ public class GameService {
                 hitterSeq = setting.getMatchSetting9th().getHitterSeq();
                 break;
         }
-        setting.setMatchSettingNextBat(nextBat);
+        setting.setMatchSettingNextBat(battingOrder);
         log.setLogHitter(hitterSeq);
         matchSettingRepository.save(setting);
         logRepository.save(log);
@@ -798,16 +820,16 @@ public class GameService {
         resultMap.put("pitcherSeq", pitcherSeq);
         resultMap.put("hitterName", hitterName);
         resultMap.put("hitterSeq", hitterSeq);
+        resultMap.put("1stBaseSeq", log1stBase);
         if (log1stBase != null) {
-            resultMap.put("1stBaseSeq", log1stBase);
             resultMap.put("1stBaseName", hitterRepository.findByHitterSeq(log1stBase));
         }
+        resultMap.put("2ndBaseSeq", log2ndBase);
         if (log2ndBase != null) {
-            resultMap.put("2ndBaseSeq", log2ndBase);
             resultMap.put("2ndBaseName", hitterRepository.findByHitterSeq(log2ndBase));
         }
+        resultMap.put("3rdBaseSeq", log3rdBase);
         if (log3rdBase != null) {
-            resultMap.put("3rdBaseSeq", log3rdBase);
             resultMap.put("3rdBaseName", hitterRepository.findByHitterSeq(log3rdBase));
         }
         resultMap.put("scoreboard", scoreboard);
